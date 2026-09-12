@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Joint Monitor — Backend Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; background:#0f1115; color:#eee; margin:0; padding:16px; }
+  h1 { font-size:1.3em; margin-bottom:4px; }
+  .sub { color:#999; font-size:0.85em; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:10px; margin-bottom:16px; }
+  .card { background:#1a1d24; border-radius:10px; padding:12px; text-align:center; }
+  .card .label { font-size:0.75em; color:#999; text-transform:uppercase; letter-spacing:0.5px; }
+  .card .value { font-size:1.6em; font-weight:600; margin-top:4px; }
+  .risk-box { background:#1a1d24; border-radius:12px; padding:18px; margin-bottom:16px; }
+  .risk-score { font-size:2.4em; font-weight:700; }
+  .risk-low { color:#4caf50; }
+  .risk-moderate { color:#ffb300; }
+  .risk-high { color:#f44336; }
+  .report { margin-top:8px; line-height:1.4em; color:#ddd; }
+  canvas { background:#1a1d24; border-radius:10px; padding:8px; margin-bottom:16px; }
+  button { background:#3556e0; color:white; border:none; padding:10px 16px; border-radius:8px; font-size:0.9em; cursor:pointer; }
+  .disclaimer { font-size:0.75em; color:#777; margin-top:20px; line-height:1.4em;}
+  .status { font-size:0.75em; margin-bottom:10px; }
+  .status.ok { color:#4caf50; }
+  .status.bad { color:#f44336; }
+</style>
+</head>
+<body>
+  <h1>Joint Motion &amp; Loading Monitor</h1>
+  <div class="sub">Backend-filtered dashboard — session time: <span id="sessionTime">0s</span></div>
+  <div class="status" id="connStatus"></div>
+
+  <div class="risk-box">
+    <div class="label">HEURISTIC RISK INDICATOR</div>
+    <div class="risk-score" id="riskScore">--</div>
+    <div id="riskCategory">Collecting data...</div>
+    <div class="report" id="report"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Knee Angle</div><div class="value" id="angleVal">--°</div></div>
+    <div class="card"><div class="label">Range of Motion</div><div class="value" id="romVal">--°</div></div>
+    <div class="card"><div class="label">Crepitus Events</div><div class="value" id="crepVal">--</div></div>
+    <div class="card"><div class="label">Crepitus Rate</div><div class="value" id="crepRateVal">--/min</div></div>
+    <div class="card"><div class="label">Foot Load (filtered)</div><div class="value" id="fsrVal">--</div></div>
+  </div>
+
+  <canvas id="angleChart" height="90"></canvas>
+  <canvas id="fsrChart" height="90"></canvas>
+
+  <div style="margin-bottom:20px;">
+    <button onclick="resetSession()">Reset Session</button>
+  </div>
+
+  <div class="disclaimer">
+    Prototype only — not a medical device. Risk score uses fixed heuristic weights defined
+    in backend.py, not a clinically validated model. Do not use for real diagnosis or treatment decisions.
+  </div>
+
+<script>
+const MAX_POINTS = 60;
+
+function makeChart(ctx, label, color) {
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: label, data: [], borderColor: color, tension:0.3, pointRadius:0 }] },
+    options: {
+      animation:false,
+      scales: { x: { display:false }, y: { ticks: { color:'#aaa' } } },
+      plugins: { legend: { labels: { color:'#ccc' } } }
+    }
+  });
+}
+const angleChart = makeChart(document.getElementById('angleChart').getContext('2d'), 'Knee Angle (deg)', '#3ba8ff');
+const fsrChart   = makeChart(document.getElementById('fsrChart').getContext('2d'), 'Foot Load (filtered ADC)', '#ffb300');
+
+function pushPoint(chart, value) {
+  const d = chart.data;
+  d.labels.push('');
+  d.datasets[0].data.push(value);
+  if (d.labels.length > MAX_POINTS) { d.labels.shift(); d.datasets[0].data.shift(); }
+  chart.update();
+}
+
+function riskClass(cat) {
+  if (cat === 'Low') return 'risk-low';
+  if (cat === 'Moderate') return 'risk-moderate';
+  if (cat === 'High') return 'risk-high';
+  return '';
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/data');
+    const d = await res.json();
+    document.getElementById('connStatus').innerText = 'Backend connected';
+    document.getElementById('connStatus').className = 'status ok';
+
+    document.getElementById('angleVal').innerText = d.angle.toFixed(1) + '°';
+    document.getElementById('romVal').innerText = d.rom.toFixed(1) + '°';
+    document.getElementById('crepVal').innerText = d.crepitusCount;
+    document.getElementById('crepRateVal').innerText = d.crepitusRate.toFixed(1) + '/min';
+    document.getElementById('fsrVal').innerText = d.fsrFiltered.toFixed ? d.fsrFiltered.toFixed(0) : d.fsrFiltered;
+    document.getElementById('sessionTime').innerText = d.sessionTime + 's';
+
+    const scoreEl = document.getElementById('riskScore');
+    scoreEl.innerText = d.riskScore.toFixed(0);
+    scoreEl.className = 'risk-score ' + riskClass(d.riskCategory);
+    document.getElementById('riskCategory').innerText = d.riskCategory;
+    document.getElementById('report').innerText = d.report;
+
+    pushPoint(angleChart, d.angle);
+    pushPoint(fsrChart, d.fsrFiltered);
+  } catch (e) {
+    document.getElementById('connStatus').innerText = 'Cannot reach backend';
+    document.getElementById('connStatus').className = 'status bad';
+    console.error(e);
+  }
+}
+async function resetSession() { await fetch('/reset', { method: 'POST' }); }
+
+setInterval(poll, 500);
+poll();
+</script>
+</body>
+</html>
