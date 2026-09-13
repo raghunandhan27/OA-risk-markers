@@ -41,8 +41,10 @@ HEALTHY_ROM_DEG = 130.0          # assumed healthy full knee-flexion ROM for thi
 lock = threading.Lock()
 
 
-def fresh_state():
+def fresh_state(name="", age=None):
     return {
+        "userName": name,
+        "userAge": age,
         "angleThigh": 0.0,
         "angleShank": 0.0,
         "kneeAngle": 0.0,
@@ -197,6 +199,8 @@ def data():
         elapsed_min = max(0.05, (time.time() - state["sessionStart"]) / 60.0)
         crepitus_rate = state["crepitusCount"] / elapsed_min
         payload = {
+            "userName": state["userName"],
+            "userAge": state["userAge"],
             "angle": state["kneeAngle"],
             "rom": rom,
             "crepitusCount": state["crepitusCount"],
@@ -212,9 +216,14 @@ def data():
 
 @app.route("/reset", methods=["GET", "POST"])
 def reset():
+    """Starts a new session. Optionally accepts {"name": ..., "age": ...} in the
+    JSON body — sent by the dashboard's 'Start Monitoring' screen."""
     global state
+    body = request.get_json(force=True, silent=True) or {}
+    name = str(body.get("name", "")).strip()
+    age = body.get("age")
     with lock:
-        state = fresh_state()
+        state = fresh_state(name=name, age=age)
     return jsonify({"status": "reset"})
 
 
