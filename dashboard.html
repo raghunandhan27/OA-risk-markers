@@ -21,47 +21,147 @@
   .report { margin-top:8px; line-height:1.4em; color:#ddd; }
   canvas { background:#1a1d24; border-radius:10px; padding:8px; margin-bottom:16px; }
   button { background:#3556e0; color:white; border:none; padding:10px 16px; border-radius:8px; font-size:0.9em; cursor:pointer; }
+  button:disabled { background:#333; color:#777; cursor:not-allowed; }
   .disclaimer { font-size:0.75em; color:#777; margin-top:20px; line-height:1.4em;}
   .status { font-size:0.75em; margin-bottom:10px; }
   .status.ok { color:#4caf50; }
   .status.bad { color:#f44336; }
+
+  /* --- Intro / patient-info screen --- */
+  #introScreen {
+    max-width: 380px;
+    margin: 60px auto;
+    background:#1a1d24;
+    border-radius:14px;
+    padding:28px;
+  }
+  #introScreen h2 { margin-top:0; font-size:1.2em; }
+  #introScreen label { display:block; font-size:0.8em; color:#999; margin:14px 0 6px; text-transform:uppercase; letter-spacing:0.5px; }
+  #introScreen input {
+    width:100%; box-sizing:border-box; padding:10px; border-radius:8px;
+    border:1px solid #333; background:#0f1115; color:#eee; font-size:1em;
+  }
+  #introScreen .startBtn { width:100%; margin-top:22px; padding:12px; font-size:1em; }
+  #introError { color:#f44336; font-size:0.8em; margin-top:8px; min-height:1em; }
+
+  #dashboardScreen { display:none; }
 </style>
 </head>
 <body>
-  <h1>Joint Motion &amp; Loading Monitor</h1>
-  <div class="sub">Backend-filtered dashboard — session time: <span id="sessionTime">0s</span></div>
-  <div class="status" id="connStatus"></div>
 
-  <div class="risk-box">
-    <div class="label">HEURISTIC RISK INDICATOR</div>
-    <div class="risk-score" id="riskScore">--</div>
-    <div id="riskCategory">Collecting data...</div>
-    <div class="report" id="report"></div>
+  <!-- ===================== SCREEN 1: patient info / start ===================== -->
+  <div id="introScreen">
+    <h2>Start a Monitoring Session</h2>
+    <div class="sub">Enter a few details before beginning.</div>
+
+    <label for="nameInput">Name</label>
+    <input id="nameInput" type="text" placeholder="e.g. Asha Verma" autocomplete="off">
+
+    <label for="ageInput">Age</label>
+    <input id="ageInput" type="number" min="1" max="120" placeholder="e.g. 54">
+
+    <button class="startBtn" onclick="startMonitoring()">Start Monitoring</button>
+    <div id="introError"></div>
   </div>
 
-  <div class="grid">
-    <div class="card"><div class="label">Knee Angle</div><div class="value" id="angleVal">--°</div></div>
-    <div class="card"><div class="label">Range of Motion</div><div class="value" id="romVal">--°</div></div>
-    <div class="card"><div class="label">Crepitus Events</div><div class="value" id="crepVal">--</div></div>
-    <div class="card"><div class="label">Crepitus Rate</div><div class="value" id="crepRateVal">--/min</div></div>
-    <div class="card"><div class="label">Foot Load (filtered)</div><div class="value" id="fsrVal">--</div></div>
-  </div>
+  <!-- ===================== SCREEN 2: live monitoring dashboard ===================== -->
+  <div id="dashboardScreen">
+    <h1>Joint Motion &amp; Loading Monitor</h1>
+    <div class="sub">
+      <span id="patientLine"></span> — session time: <span id="sessionTime">0s</span>
+    </div>
+    <div class="status" id="connStatus"></div>
 
-  <canvas id="angleChart" height="90"></canvas>
-  <canvas id="fsrChart" height="90"></canvas>
+    <div class="risk-box">
+      <div class="label">HEURISTIC RISK INDICATOR</div>
+      <div class="risk-score" id="riskScore">--</div>
+      <div id="riskCategory">Collecting data...</div>
+      <div class="report" id="report"></div>
+    </div>
 
-  <div style="margin-bottom:20px;">
-    <button onclick="resetSession()">Reset Session</button>
-  </div>
+    <div class="grid">
+      <div class="card"><div class="label">Knee Angle</div><div class="value" id="angleVal">--°</div></div>
+      <div class="card"><div class="label">Range of Motion</div><div class="value" id="romVal">--°</div></div>
+      <div class="card"><div class="label">Crepitus Events</div><div class="value" id="crepVal">--</div></div>
+      <div class="card"><div class="label">Crepitus Rate</div><div class="value" id="crepRateVal">--/min</div></div>
+      <div class="card"><div class="label">Foot Load (filtered)</div><div class="value" id="fsrVal">--</div></div>
+    </div>
 
-  <div class="disclaimer">
-    Prototype only — not a medical device. Risk score uses fixed heuristic weights defined
-    in backend.py, not a clinically validated model. Do not use for real diagnosis or treatment decisions.
+    <canvas id="angleChart" height="90"></canvas>
+    <canvas id="fsrChart" height="90"></canvas>
+
+    <div style="margin-bottom:20px;">
+      <button onclick="newSession()">New Session (change name/age)</button>
+      <button onclick="resetSession()">Reset Stats Only</button>
+    </div>
+
+    <div class="disclaimer">
+      Prototype only — not a medical device. Risk score uses fixed heuristic weights defined
+      in backend.py, not a clinically validated model. Do not use for real diagnosis or treatment decisions.
+    </div>
   </div>
 
 <script>
 const MAX_POINTS = 60;
+let pollTimer = null;
+let currentName = "";
+let currentAge = "";
 
+// ---------------- Screen switching ----------------
+function showDashboard() {
+  document.getElementById('introScreen').style.display = 'none';
+  document.getElementById('dashboardScreen').style.display = 'block';
+}
+function showIntro() {
+  document.getElementById('dashboardScreen').style.display = 'none';
+  document.getElementById('introScreen').style.display = 'block';
+  document.getElementById('introError').innerText = '';
+}
+
+// ---------------- Start Monitoring button ----------------
+async function startMonitoring() {
+  const name = document.getElementById('nameInput').value.trim();
+  const age = document.getElementById('ageInput').value.trim();
+  const errEl = document.getElementById('introError');
+
+  if (!name) { errEl.innerText = 'Please enter a name.'; return; }
+  if (!age || isNaN(age) || age <= 0) { errEl.innerText = 'Please enter a valid age.'; return; }
+
+  currentName = name;
+  currentAge = age;
+
+  try {
+    await fetch('/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, age: Number(age) })
+    });
+  } catch (e) {
+    errEl.innerText = 'Could not reach the backend — is backend.py running?';
+    return;
+  }
+
+  document.getElementById('patientLine').innerText = name + ' · age ' + age;
+  showDashboard();
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(poll, 500);
+  poll();
+}
+
+function newSession() {
+  if (pollTimer) clearInterval(pollTimer);
+  showIntro();
+}
+
+async function resetSession() {
+  await fetch('/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: currentName, age: Number(currentAge) })
+  });
+}
+
+// ---------------- Charts ----------------
 function makeChart(ctx, label, color) {
   return new Chart(ctx, {
     type: 'line',
@@ -91,6 +191,7 @@ function riskClass(cat) {
   return '';
 }
 
+// ---------------- Polling loop (only runs once monitoring has started) ----------------
 async function poll() {
   try {
     const res = await fetch('/data');
@@ -104,6 +205,10 @@ async function poll() {
     document.getElementById('crepRateVal').innerText = d.crepitusRate.toFixed(1) + '/min';
     document.getElementById('fsrVal').innerText = d.fsrFiltered.toFixed ? d.fsrFiltered.toFixed(0) : d.fsrFiltered;
     document.getElementById('sessionTime').innerText = d.sessionTime + 's';
+
+    if (d.userName) {
+      document.getElementById('patientLine').innerText = d.userName + (d.userAge ? (' · age ' + d.userAge) : '');
+    }
 
     const scoreEl = document.getElementById('riskScore');
     scoreEl.innerText = d.riskScore.toFixed(0);
@@ -119,10 +224,9 @@ async function poll() {
     console.error(e);
   }
 }
-async function resetSession() { await fetch('/reset', { method: 'POST' }); }
 
-setInterval(poll, 500);
-poll();
+// Start on the intro screen
+showIntro();
 </script>
 </body>
 </html>
